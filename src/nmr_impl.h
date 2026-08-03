@@ -148,7 +148,6 @@ typedef class nmr_t
         UnbindComplete ///< Client or provider detach returned STATUS_SUCCESS or called NmrBindingDetachClientComplete
                        ///< or NmrBindingDetachProviderComplete.
     };
-
     struct binding
     {
         provider_registration& provider;
@@ -250,7 +249,7 @@ typedef class nmr_t
      * @brief Start the process of unbinding a client from a provider.
      *
      * @param[in] binding_handle Binding handle to unbind.
-     * @retval true Either the client or provider returned pending.
+     * @retval true Either unbind cannot start yet or it is pending/in progress.
      * @retval false Both the client and provider returned successfully.
      */
     bool

@@ -189,9 +189,15 @@ nmr_t::bind(_Inout_ client_registration& client, _Inout_ provider_registration& 
         if (!NT_SUCCESS(status)) {
             unbind_complete(*binding_ptr);
         } else {
+            bool should_begin_unbind = false;
             std::unique_lock l(lock);
             binding_ptr->client_binding_status = binding_status::Ready;
             binding_ptr->provider_binding_status = binding_status::Ready;
+            should_begin_unbind = binding_ptr->client.deregistering || binding_ptr->provider.deregistering;
+            l.unlock();
+            if (should_begin_unbind) {
+                (void)begin_unbind(*binding_ptr);
+            }
         }
     }};
 }
@@ -221,12 +227,13 @@ nmr_t::unbind_complete(_Inout_ binding& binding)
     bindings_changed.notify_all();
 }
 
-bool // true if pending, false if complete.
+bool
 nmr_t::begin_unbind(_Inout_ binding& binding)
 {
     std::unique_lock l(lock);
     if (binding.client_binding_status != Ready || binding.provider_binding_status != Ready) {
-        // Unbind already started.
+        // A Start binding is already published and contributes to binding_count, so deregistration
+        // must keep waiting even though detach cannot begin until attach finishes and reaches Ready.
         return true;
     }
     binding.client_binding_status = BeginUnbind;
@@ -356,7 +363,7 @@ nmr_t::perform_bind(
 }
 
 template <typename initiator_collection_t>
-bool // true if pending, false if complete
+bool
 nmr_t::perform_unbind(
     _Inout_ initiator_collection_t& initiator_collection,
     _In_ initiator_collection_t::value_type::first_type initiator_handle)

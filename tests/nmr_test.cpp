@@ -8,6 +8,9 @@
 #endif
 #include "../src/framework.h"
 #include <../km/netioddk.h>
+#include <atomic>
+#include <iostream>
+#include <thread>
 
 NPIID test_npiid = {0};
 
@@ -153,6 +156,98 @@ NPI_PROVIDER_CHARACTERISTICS _test_provider_characteristics = {
     .ProviderRegistrationInstance = _test_provider_registration_instance};
 
 #pragma endregion test_nmr_provider
+
+#pragma region smoke_nmr_client_provider
+
+// Use a distinct NPI ID so smoke registrations never match the test_npiid registrations above,
+// preventing cross-contamination when test_npiid registrations are left over from failed tests.
+NPIID smoke_npiid = {1};
+
+NPI_REGISTRATION_INSTANCE _smoke_client_registration_instance = {
+    .Size = sizeof(NPI_REGISTRATION_INSTANCE), .NpiId = &smoke_npiid};
+NPI_REGISTRATION_INSTANCE _smoke_provider_registration_instance = {
+    .Size = sizeof(NPI_REGISTRATION_INSTANCE), .NpiId = &smoke_npiid};
+
+static NTSTATUS
+_smoke_client_attach_provider(
+    _In_ HANDLE nmr_binding_handle,
+    _In_opt_ void* client_context,
+    _In_ NPI_REGISTRATION_INSTANCE* provider_registration_instance)
+{
+    UNREFERENCED_PARAMETER(client_context);
+    UNREFERENCED_PARAMETER(provider_registration_instance);
+
+    void* provider_binding_context = nullptr;
+    const void* provider_dispatch = nullptr;
+    return NmrClientAttachProvider(
+        nmr_binding_handle,
+        reinterpret_cast<void*>(nmr_binding_handle),
+        TEST_CLIENT_DISPATCH,
+        &provider_binding_context,
+        &provider_dispatch);
+}
+
+static NTSTATUS
+_smoke_client_detach_provider(_In_ void* client_binding_context)
+{
+    UNREFERENCED_PARAMETER(client_binding_context);
+    return STATUS_SUCCESS;
+}
+
+static void
+_smoke_client_cleanup_binding_context(_In_ void* client_binding_context)
+{
+    UNREFERENCED_PARAMETER(client_binding_context);
+}
+
+NPI_CLIENT_CHARACTERISTICS _smoke_client_characteristics = {
+    .Length = sizeof(NPI_CLIENT_CHARACTERISTICS),
+    .ClientAttachProvider = (PNPI_CLIENT_ATTACH_PROVIDER_FN)_smoke_client_attach_provider,
+    .ClientDetachProvider = _smoke_client_detach_provider,
+    .ClientCleanupBindingContext = _smoke_client_cleanup_binding_context,
+    .ClientRegistrationInstance = _smoke_client_registration_instance};
+
+static NTSTATUS
+_smoke_provider_attach_client(
+    _In_ HANDLE nmr_binding_handle,
+    _In_opt_ void* provider_context,
+    _In_ NPI_REGISTRATION_INSTANCE* client_registration_instance,
+    _In_ void* client_binding_context,
+    _In_ const void* client_dispatch,
+    _Outptr_ void** provider_binding_context,
+    _Outptr_ const void** provider_dispatch)
+{
+    UNREFERENCED_PARAMETER(nmr_binding_handle);
+    UNREFERENCED_PARAMETER(provider_context);
+    UNREFERENCED_PARAMETER(client_registration_instance);
+    UNREFERENCED_PARAMETER(client_dispatch);
+
+    *provider_binding_context = client_binding_context;
+    *provider_dispatch = TEST_PROVIDER_DISPATCH;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+_smoke_provider_detach_client(_In_ void* provider_binding_context)
+{
+    UNREFERENCED_PARAMETER(provider_binding_context);
+    return STATUS_SUCCESS;
+}
+
+static void
+_smoke_provider_cleanup_binding_context(_In_ void* provider_binding_context)
+{
+    UNREFERENCED_PARAMETER(provider_binding_context);
+}
+
+NPI_PROVIDER_CHARACTERISTICS _smoke_provider_characteristics = {
+    .Length = sizeof(NPI_PROVIDER_CHARACTERISTICS),
+    .ProviderAttachClient = (PNPI_PROVIDER_ATTACH_CLIENT_FN)_smoke_provider_attach_client,
+    .ProviderDetachClient = _smoke_provider_detach_client,
+    .ProviderCleanupBindingContext = _smoke_provider_cleanup_binding_context,
+    .ProviderRegistrationInstance = _smoke_provider_registration_instance};
+
+#pragma endregion smoke_nmr_client_provider
 
 TEST_CASE("NmrRegisterClient", "[nmr]")
 {
@@ -322,4 +417,50 @@ TEST_CASE("NmrRegisterProvider with async deregister", "[nmr]")
     REQUIRE(_test_provider_binding_context.nmr_binding_handle == nullptr);
 
     REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_SUCCESS);
+}
+
+TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
+{
+    constexpr size_t iteration_count = 1000;
+    std::atomic<size_t> provider_iterations{0};
+    std::atomic<size_t> client_iterations{0};
+
+    std::thread provider_thread([iteration_count, &provider_iterations]() {
+        for (size_t i = 0; i < iteration_count; i++) {
+            provider_iterations++;
+            HANDLE nmr_provider_handle = nullptr;
+            NTSTATUS register_status =
+                NmrRegisterProvider(&_smoke_provider_characteristics, nullptr, &nmr_provider_handle);
+            if (!NT_SUCCESS(register_status)) {
+                continue;
+            }
+
+            NTSTATUS deregister_status = NmrDeregisterProvider(nmr_provider_handle);
+            if (deregister_status == STATUS_PENDING) {
+                (void)NmrWaitForProviderDeregisterComplete(nmr_provider_handle);
+            }
+        }
+    });
+
+    std::thread client_thread([iteration_count, &client_iterations]() {
+        for (size_t i = 0; i < iteration_count; i++) {
+            client_iterations++;
+            HANDLE nmr_client_handle = nullptr;
+            NTSTATUS register_status = NmrRegisterClient(&_smoke_client_characteristics, nullptr, &nmr_client_handle);
+            if (!NT_SUCCESS(register_status)) {
+                continue;
+            }
+
+            NTSTATUS deregister_status = NmrDeregisterClient(nmr_client_handle);
+            if (deregister_status == STATUS_PENDING) {
+                (void)NmrWaitForClientDeregisterComplete(nmr_client_handle);
+            }
+        }
+    });
+
+    provider_thread.join();
+    client_thread.join();
+
+    std::cout << "provider_iterations=" << provider_iterations.load() << ", client_iterations="
+              << client_iterations.load() << std::endl;
 }
