@@ -9,6 +9,7 @@
 #include "../src/framework.h"
 #include <../km/netioddk.h>
 #include <atomic>
+#include <chrono>
 #include <iostream>
 #include <thread>
 
@@ -421,13 +422,18 @@ TEST_CASE("NmrRegisterProvider with async deregister", "[nmr]")
 
 TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
 {
-    constexpr size_t iteration_count = 1000;
-    std::atomic<size_t> provider_iterations{0};
-    std::atomic<size_t> client_iterations{0};
+    constexpr auto run_duration = std::chrono::seconds(30);
+    const auto test_start = std::chrono::steady_clock::now();
+    std::atomic<size_t> ready_threads{0};
+    std::atomic<bool> start{false};
 
-    std::thread provider_thread([iteration_count, &provider_iterations]() {
-        for (size_t i = 0; i < iteration_count; i++) {
-            provider_iterations++;
+    std::thread provider_thread([&ready_threads, &start, run_duration]() {
+        ready_threads++;
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + run_duration;
+        while (std::chrono::steady_clock::now() < deadline) {
             HANDLE nmr_provider_handle = nullptr;
             NTSTATUS register_status =
                 NmrRegisterProvider(&_smoke_provider_characteristics, nullptr, &nmr_provider_handle);
@@ -442,9 +448,13 @@ TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
         }
     });
 
-    std::thread client_thread([iteration_count, &client_iterations]() {
-        for (size_t i = 0; i < iteration_count; i++) {
-            client_iterations++;
+    std::thread client_thread([&ready_threads, &start, run_duration]() {
+        ready_threads++;
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + run_duration;
+        while (std::chrono::steady_clock::now() < deadline) {
             HANDLE nmr_client_handle = nullptr;
             NTSTATUS register_status = NmrRegisterClient(&_smoke_client_characteristics, nullptr, &nmr_client_handle);
             if (!NT_SUCCESS(register_status)) {
@@ -458,9 +468,15 @@ TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
         }
     });
 
+    while (ready_threads.load(std::memory_order_acquire) != 2) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+
     provider_thread.join();
     client_thread.join();
 
-    std::cout << "provider_iterations=" << provider_iterations.load() << ", client_iterations="
-              << client_iterations.load() << std::endl;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - test_start);
+    std::cout << "smoke test duration: " << elapsed.count() << " ms" << std::endl;
 }
