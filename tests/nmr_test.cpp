@@ -7,6 +7,7 @@
 #include <catch2/catch.hpp>
 #endif
 #include "../src/framework.h"
+
 #include <../km/netioddk.h>
 #include <atomic>
 #include <chrono>
@@ -253,13 +254,14 @@ NPI_PROVIDER_CHARACTERISTICS _smoke_provider_characteristics = {
 TEST_CASE("NmrRegisterClient", "[nmr]")
 {
     HANDLE nmr_client_handle;
-    
+
     REQUIRE(NmrRegisterClient(&_test_client_characteristics, nullptr, &nmr_client_handle) == STATUS_SUCCESS);
 
     // Verify there was no binding callback, since there are no providers.
     REQUIRE(_test_client_binding_context.allocated == false);
 
-    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForClientDeregisterComplete(nmr_client_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("NmrRegisterProvider", "[nmr]")
@@ -271,7 +273,8 @@ TEST_CASE("NmrRegisterProvider", "[nmr]")
     // Verify there was no binding callback, since there are no clients.
     REQUIRE(_test_provider_binding_context.allocated == false);
 
-    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForProviderDeregisterComplete(nmr_provider_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("attach during NmrRegisterProvider", "[nmr]")
@@ -296,7 +299,8 @@ TEST_CASE("attach during NmrRegisterProvider", "[nmr]")
     REQUIRE(_test_provider_binding_context.client_dispatch == TEST_CLIENT_DISPATCH);
 
     // Deregister the provider first.
-    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForProviderDeregisterComplete(nmr_provider_handle) == STATUS_SUCCESS);
 
     REQUIRE(_test_client_binding_context.allocated == false);
     REQUIRE(_test_client_binding_context.nmr_binding_handle == nullptr);
@@ -308,7 +312,8 @@ TEST_CASE("attach during NmrRegisterProvider", "[nmr]")
     REQUIRE(_test_provider_binding_context.client_binding_context == nullptr);
     REQUIRE(_test_provider_binding_context.client_dispatch == nullptr);
 
-    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForClientDeregisterComplete(nmr_client_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("attach during NmrRegisterClient", "[nmr]")
@@ -333,7 +338,8 @@ TEST_CASE("attach during NmrRegisterClient", "[nmr]")
     REQUIRE(_test_provider_binding_context.client_dispatch == TEST_CLIENT_DISPATCH);
 
     // Deregister the client first.
-    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForClientDeregisterComplete(nmr_client_handle) == STATUS_SUCCESS);
 
     REQUIRE(_test_client_binding_context.allocated == false);
     REQUIRE(_test_client_binding_context.nmr_binding_handle == nullptr);
@@ -345,7 +351,8 @@ TEST_CASE("attach during NmrRegisterClient", "[nmr]")
     REQUIRE(_test_provider_binding_context.client_binding_context == nullptr);
     REQUIRE(_test_provider_binding_context.client_dispatch == nullptr);
 
-    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForProviderDeregisterComplete(nmr_provider_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("NmrRegisterClient with async deregister", "[nmr]")
@@ -381,7 +388,8 @@ TEST_CASE("NmrRegisterClient with async deregister", "[nmr]")
     REQUIRE(_test_provider_binding_context.allocated == false);
     REQUIRE(_test_provider_binding_context.nmr_binding_handle == nullptr);
 
-    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterProvider(nmr_provider_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForProviderDeregisterComplete(nmr_provider_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("NmrRegisterProvider with async deregister", "[nmr]")
@@ -417,7 +425,8 @@ TEST_CASE("NmrRegisterProvider with async deregister", "[nmr]")
     REQUIRE(_test_provider_binding_context.allocated == false);
     REQUIRE(_test_provider_binding_context.nmr_binding_handle == nullptr);
 
-    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_SUCCESS);
+    REQUIRE(NmrDeregisterClient(nmr_client_handle) == STATUS_PENDING);
+    REQUIRE(NmrWaitForClientDeregisterComplete(nmr_client_handle) == STATUS_SUCCESS);
 }
 
 TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
@@ -476,7 +485,7 @@ TEST_CASE("concurrent register/deregister smoke", "[nmr][no_fi]")
     provider_thread.join();
     client_thread.join();
 
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - test_start);
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - test_start);
     std::cout << "smoke test duration: " << elapsed.count() << " ms" << std::endl;
 }
